@@ -94,6 +94,7 @@ impl Client {
     /// on the same underlying connection (tcp/unix socket).
     ///
     /// This requires the `tokio-rt-core` feature as it uses the default tokio executor.
+    #[cfg(feature = "aio")]
     pub async fn get_multiplexed_async_std_connection(
         &self,
     ) -> RedisResult<crate::aio::MultiplexedConnection> {

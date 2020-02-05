@@ -73,6 +73,10 @@ name = "test_async"
 required-features = ["tokio-rt-core"]
 
 [[test]]
+name = "test_async_async_std"
+required-features = ["aio"]
+
+[[test]]
 name = "parser"
 required-features = ["aio"]
 

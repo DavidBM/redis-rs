@@ -9,7 +9,10 @@ use std::task::{self, Poll};
 use combine::{parser::combinator::AnySendPartialState, stream::PointerOffset};
 
 #[cfg(unix)]
-use tokio::net::UnixStream;
+use tokio::net::UnixStream as UnixStreamTokio;
+
+#[cfg(unix)]
+use async_std::os::unix::net::UnixStream as UnixStreamAsyncStd;
 
 use tokio::{
     io::{AsyncRead, AsyncWrite, AsyncWriteExt},
@@ -17,6 +20,13 @@ use tokio::{
     sync::{mpsc, oneshot},
 };
 use tokio_util::codec::Decoder;
+
+use async_std::{
+    io::{
+        Write, Read
+    },
+    net::TcpStream as TcpStreamAsyncStd,
+};
 
 #[cfg(unix)]
 use futures_util::future::Either;
@@ -37,9 +47,12 @@ use crate::connection::{ConnectionAddr, ConnectionInfo};
 use crate::parser::ValueCodec;
 
 enum ActualConnection {
-    Tcp(TcpStream),
+    TcpTokio(TcpStreamTokio),
     #[cfg(unix)]
-    Unix(UnixStream),
+    UnixTokio(UnixStreamTokio),
+    TcpAsyncStd(TcpStreamAsyncStd),
+    #[cfg(unix)]
+    UnixAsyncStd(UnixStreamAsyncStd),
 }
 
 impl AsyncWrite for ActualConnection {
@@ -52,6 +65,9 @@ impl AsyncWrite for ActualConnection {
             ActualConnection::TcpTokio(r) => Pin::new(r).poll_write(cx, buf),
             #[cfg(unix)]
             ActualConnection::UnixTokio(r) => Pin::new(r).poll_write(cx, buf),
+            ActualConnection::TcpAsyncStd(r) => Pin::new(r).poll_write(cx, buf),
+            #[cfg(unix)]
+            ActualConnection::UnixAsyncStd(r) => Pin::new(r).poll_write(cx, buf),
         }
     }
 
@@ -60,6 +76,9 @@ impl AsyncWrite for ActualConnection {
             ActualConnection::TcpTokio(r) => Pin::new(r).poll_flush(cx),
             #[cfg(unix)]
             ActualConnection::UnixTokio(r) => Pin::new(r).poll_flush(cx),
+            ActualConnection::TcpAsyncStd(r) => Pin::new(r).poll_flush(cx),
+            #[cfg(unix)]
+            ActualConnection::UnixAsyncStd(r) => Pin::new(r).poll_flush(cx),
         }
     }
 
@@ -68,6 +87,9 @@ impl AsyncWrite for ActualConnection {
             ActualConnection::TcpTokio(r) => Pin::new(r).poll_shutdown(cx),
             #[cfg(unix)]
             ActualConnection::UnixTokio(r) => Pin::new(r).poll_shutdown(cx),
+            ActualConnection::TcpAsyncStd(r) => Pin::new(r).poll_close(cx),
+            #[cfg(unix)]
+            ActualConnection::UnixAsyncStd(r) => Pin::new(r).poll_close(cx),
         }
     }
 }
@@ -82,6 +104,9 @@ impl AsyncRead for ActualConnection {
             ActualConnection::TcpTokio(r) => Pin::new(r).poll_read(cx, buf),
             #[cfg(unix)]
             ActualConnection::UnixTokio(r) => Pin::new(r).poll_read(cx, buf),
+            ActualConnection::TcpAsyncStd(r) => Pin::new(r).poll_read(cx, buf),
+            #[cfg(unix)]
+            ActualConnection::UnixAsyncStd(r) => Pin::new(r).poll_read(cx, buf),
         }
     }
 }
@@ -103,6 +128,22 @@ impl Connection {
 /// Opens a connection.
 pub async fn connect_tokio(connection_info: &ConnectionInfo) -> RedisResult<Connection> {
     let con = connect_simple_tokio(connection_info).await?;
+
+    let mut rv = Connection {
+        con,
+        buf: Vec::new(),
+        decoder: combine::stream::Decoder::new(),
+        db: connection_info.db,
+    };
+
+    authenticate(connection_info, &mut rv).await?;
+
+    Ok(rv)
+}
+
+/// Opens a connection.
+pub async fn connect_async_std(connection_info: &ConnectionInfo) -> RedisResult<Connection> {
+    let con = connect_simple_async_std(connection_info).await?;
 
     let mut rv = Connection {
         con,
@@ -170,6 +211,45 @@ async fn connect_simple_tokio(connection_info: &ConnectionInfo) -> RedisResult<A
         ConnectionAddr::Unix(ref path) => UnixStream::connect(path)
             .await
             .map(ActualConnection::UnixTokio)?,
+
+        #[cfg(not(unix))]
+        ConnectionAddr::Unix(_) => {
+            return Err(RedisError::from((
+                ErrorKind::InvalidClientConfig,
+                "Cannot connect to unix sockets \
+                 on this platform",
+            )))
+        }
+    })
+}
+
+async fn connect_simple_async_std(
+    connection_info: &ConnectionInfo,
+) -> RedisResult<ActualConnection> {
+    Ok(match *connection_info.addr {
+        ConnectionAddr::Tcp(ref host, port) => {
+            let socket_addr = {
+                let mut socket_addrs = (&host[..], port).to_socket_addrs()?;
+                match socket_addrs.next() {
+                    Some(socket_addr) => socket_addr,
+                    None => {
+                        return Err(RedisError::from((
+                            ErrorKind::InvalidClientConfig,
+                            "No address found for host",
+                        )));
+                    }
+                }
+            };
+
+            TcpStreamAsyncStd::connect(&socket_addr)
+                .await
+                .map(ActualConnection::TcpAsyncStd)?
+        }
+
+        #[cfg(unix)]
+        ConnectionAddr::Unix(ref path) => UnixStreamAsyncStd::connect(path)
+            .await
+            .map(ActualConnection::UnixAsyncStd)?,
 
         #[cfg(not(unix))]
         ConnectionAddr::Unix(_) => {

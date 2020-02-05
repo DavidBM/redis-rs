@@ -11,19 +11,12 @@ use combine::{parser::combinator::AnySendPartialState, stream::PointerOffset};
 #[cfg(unix)]
 use tokio::net::UnixStream as UnixStreamTokio;
 
-#[cfg(feature = "async-std-aio")]
-#[cfg(unix)]
-use async_std::os::unix::net::UnixStream as UnixStreamAsyncStd;
-
 use tokio::{
     io::{AsyncRead, AsyncWrite, AsyncWriteExt},
     net::TcpStream as TcpStreamTokio,
     sync::{mpsc, oneshot},
 };
 use tokio_util::codec::Decoder;
-
-#[cfg(feature = "async-std-aio")]
-use async_std::net::TcpStream as TcpStreamAsyncStd;
 
 #[cfg(unix)]
 use futures_util::future::Either;
@@ -45,11 +38,16 @@ use crate::parser::ValueCodec;
 
 #[cfg(feature = "async-std-aio")]
 mod async_std_aio {
-    
+    use super::{AsyncRead, AsyncWrite, Pin, ActualConnection, ConnectionAddr, ConnectionInfo, RedisResult, RedisError, ErrorKind};
+    use std::net::ToSocketAddrs;
+    use async_std::net::TcpStream as TcpStreamAsyncStd;
+    #[cfg(unix)]
+    use async_std::os::unix::net::UnixStream as UnixStreamAsyncStd;
+
     pub struct TcpStreamAsyncStdWrapped(TcpStreamAsyncStd);
     pub struct UnixStreamAsyncStdWrapped(UnixStreamAsyncStd);
 
-    pub impl AsyncWrite for TcpStreamAsyncStdWrapped {
+    impl AsyncWrite for TcpStreamAsyncStdWrapped {
         fn poll_write(
             mut self: Pin<&mut Self>,
             cx: &mut core::task::Context,
@@ -72,7 +70,7 @@ mod async_std_aio {
         }
     }
 
-    pub impl AsyncRead for TcpStreamAsyncStdWrapped {
+    impl AsyncRead for TcpStreamAsyncStdWrapped {
         fn poll_read(
             mut self: Pin<&mut Self>,
             cx: &mut core::task::Context,
@@ -82,7 +80,7 @@ mod async_std_aio {
         }
     }
 
-    pub impl AsyncWrite for UnixStreamAsyncStdWrapped {
+    impl AsyncWrite for UnixStreamAsyncStdWrapped {
         fn poll_write(
             mut self: Pin<&mut Self>,
             cx: &mut core::task::Context,
@@ -105,7 +103,7 @@ mod async_std_aio {
         }
     }
 
-    pub impl AsyncRead for UnixStreamAsyncStdWrapped {
+    impl AsyncRead for UnixStreamAsyncStdWrapped {
         fn poll_read(
             mut self: Pin<&mut Self>,
             cx: &mut core::task::Context,
@@ -115,7 +113,7 @@ mod async_std_aio {
         }
     }
 
-    async fn connect_simple_async_std(
+    pub async fn connect_simple_async_std(
         connection_info: &ConnectionInfo,
     ) -> RedisResult<ActualConnection> {
         Ok(match *connection_info.addr {
@@ -153,18 +151,22 @@ mod async_std_aio {
             }
         })
     }
-
 }
 
-enum ActualConnection {
+/// Represents an async Connection (TCP or Unix. Tokio or Async Std) 
+pub enum ActualConnection {
+    /// Represents a Tokio TCP connection.
     TcpTokio(TcpStreamTokio),
     #[cfg(unix)]
+    /// Represents a Tokio Unix connection.
     UnixTokio(UnixStreamTokio),
+    /// Represents an Async_std TCP connection.
     #[cfg(feature = "async-std-aio")]
-    TcpAsyncStd(TcpStreamAsyncStdWrapped),
+    TcpAsyncStd(async_std_aio::TcpStreamAsyncStdWrapped),
+    /// Represents an Async_std Unix connection.
     #[cfg(feature = "async-std-aio")]
     #[cfg(unix)]
-    UnixAsyncStd(UnixStreamAsyncStdWrapped),
+    UnixAsyncStd(async_std_aio::UnixStreamAsyncStdWrapped),
 }
 
 impl AsyncWrite for ActualConnection {
@@ -264,7 +266,7 @@ pub async fn connect_tokio(connection_info: &ConnectionInfo) -> RedisResult<Conn
 /// Opens a connection.
 #[cfg(feature = "async-std-aio")]
 pub async fn connect_async_std(connection_info: &ConnectionInfo) -> RedisResult<Connection> {
-    let con = connect_simple_async_std(connection_info).await?;
+    let con = async_std_aio::connect_simple_async_std(connection_info).await?;
 
     let mut rv = Connection {
         con,
@@ -665,7 +667,7 @@ impl MultiplexedConnection {
     pub(crate) async fn new_async_std(
         connection_info: &ConnectionInfo,
     ) -> RedisResult<(Self, impl Future<Output = ()>)> {
-        let con = connect_simple_async_std(connection_info).await?;
+        let con = async_std_aio::connect_simple_async_std(connection_info).await?;
         MultiplexedConnection::create_connection(connection_info, con).await
     }
 

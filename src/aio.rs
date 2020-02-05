@@ -659,13 +659,13 @@ impl MultiplexedConnection {
             ActualConnection::TcpTokio(tcp) => {
                 let codec = ValueCodec::default().framed(tcp);
                 let (pipeline, driver) = Pipeline::new(codec);
-                (pipeline, driver)
+                (pipeline, Either::Left(driver))
             }
             #[cfg(not(unix))]
             ActualConnection::TcpAsyncStd(tcp) => {
                 let codec = ValueCodec::default().framed(tcp);
                 let (pipeline, driver) = Pipeline::new(codec);
-                (pipeline, driver)
+                (pipeline, Either::Right(driver))
             }
             #[cfg(unix)]
             ActualConnection::TcpTokio(tcp) => {

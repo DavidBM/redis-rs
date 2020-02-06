@@ -5,6 +5,7 @@ use std::io;
 use std::mem;
 use std::net::SocketAddr;
 use std::net::ToSocketAddrs;
+#[cfg(unix)]
 use std::path::Path;
 use std::pin::Pin;
 use std::task::{self, Poll};
@@ -21,8 +22,9 @@ use tokio::{
 };
 use tokio_util::codec::Decoder;
 
-#[cfg(unix)]
+#[cfg(any(unix, feature = "async-std-aio"))]
 use futures_util::future::Either;
+
 use futures_util::{
     future::{Future, FutureExt, TryFutureExt},
     ready,
@@ -126,6 +128,7 @@ mod async_std_aio {
                 .await
                 .map(|con| ActualConnection::TcpAsyncStd(TcpStreamAsyncStdWrapped(con)))?)
         }
+        #[cfg(unix)]
         async fn connect_unix(path: &Path) -> RedisResult<ActualConnection> {
             Ok(UnixStreamAsyncStd::connect(path)
                 .await
@@ -138,8 +141,8 @@ mod async_std_aio {
 pub enum ActualConnection {
     /// Represents a Tokio TCP connection.
     TcpTokio(TcpStreamTokio),
-    #[cfg(unix)]
     /// Represents a Tokio Unix connection.
+    #[cfg(unix)]
     UnixTokio(UnixStreamTokio),
     /// Represents an Async_std TCP connection.
     #[cfg(feature = "async-std-aio")]
@@ -291,6 +294,7 @@ where
 #[async_trait]
 trait Connect {
     async fn connect_tcp(socket_addr: SocketAddr) -> RedisResult<ActualConnection>;
+    #[cfg(unix)]
     async fn connect_unix(path: &Path) -> RedisResult<ActualConnection>;
 }
 
@@ -303,6 +307,7 @@ impl Connect for Tokio {
             .await
             .map(ActualConnection::TcpTokio)?)
     }
+    #[cfg(unix)]
     async fn connect_unix(path: &Path) -> RedisResult<ActualConnection> {
         Ok(UnixStreamTokio::connect(path)
             .await
@@ -676,56 +681,65 @@ impl MultiplexedConnection {
     ) -> RedisResult<(Self, impl Future<Output = ()>)> {
         let (pipeline, driver) = match con {
             #[cfg(not(unix))]
+            #[cfg(not(feature = "async-std-aio"))]
+            ActualConnection::TcpTokio(tcp) => {
+                let codec = ValueCodec::default().framed(tcp);
+                let (pipeline, driver) = Pipeline::new(codec);
+                (pipeline, driver)
+            }
+            #[cfg(not(unix))]
+            #[cfg(feature = "async-std-aio")]
             ActualConnection::TcpTokio(tcp) => {
                 let codec = ValueCodec::default().framed(tcp);
                 let (pipeline, driver) = Pipeline::new(codec);
                 (pipeline, Either::Left(driver))
             }
             #[cfg(not(unix))]
+            #[cfg(feature = "async-std-aio")]
             ActualConnection::TcpAsyncStd(tcp) => {
                 let codec = ValueCodec::default().framed(tcp);
                 let (pipeline, driver) = Pipeline::new(codec);
                 (pipeline, Either::Right(driver))
             }
-            #[cfg(not(feature = "async-std-aio"))]
             #[cfg(unix)]
+            #[cfg(not(feature = "async-std-aio"))]
             ActualConnection::TcpTokio(tcp) => {
                 let codec = ValueCodec::default().framed(tcp);
                 let (pipeline, driver) = Pipeline::new(codec);
                 (pipeline, Either::Left(driver))
             }
-            #[cfg(not(feature = "async-std-aio"))]
             #[cfg(unix)]
+            #[cfg(not(feature = "async-std-aio"))]
             ActualConnection::UnixTokio(unix) => {
                 let codec = ValueCodec::default().framed(unix);
                 let (pipeline, driver) = Pipeline::new(codec);
 
                 (pipeline, Either::Right(driver))
             }
-            #[cfg(feature = "async-std-aio")]
             #[cfg(unix)]
+            #[cfg(feature = "async-std-aio")]
             ActualConnection::TcpTokio(tcp) => {
                 let codec = ValueCodec::default().framed(tcp);
                 let (pipeline, driver) = Pipeline::new(codec);
                 (pipeline, Either::Left(Either::Left(driver)))
             }
-            #[cfg(feature = "async-std-aio")]
             #[cfg(unix)]
+            #[cfg(feature = "async-std-aio")]
             ActualConnection::UnixTokio(unix) => {
                 let codec = ValueCodec::default().framed(unix);
                 let (pipeline, driver) = Pipeline::new(codec);
 
                 (pipeline, Either::Right(Either::Left(driver)))
             }
-            #[cfg(feature = "async-std-aio")]
             #[cfg(unix)]
+            #[cfg(feature = "async-std-aio")]
             ActualConnection::TcpAsyncStd(tcp) => {
                 let codec = ValueCodec::default().framed(tcp);
                 let (pipeline, driver) = Pipeline::new(codec);
                 (pipeline, Either::Left(Either::Right(driver)))
             }
-            #[cfg(feature = "async-std-aio")]
             #[cfg(unix)]
+            #[cfg(feature = "async-std-aio")]
             ActualConnection::UnixAsyncStd(unix) => {
                 let codec = ValueCodec::default().framed(unix);
                 let (pipeline, driver) = Pipeline::new(codec);

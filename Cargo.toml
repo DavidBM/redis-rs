@@ -77,7 +77,7 @@ required-features = ["tokio-rt-core"]
 
 [[test]]
 name = "test_async_async_std"
-required-features = ["async-std"]
+required-features = ["async-std-comp"]
 
 [[test]]
 name = "parser"

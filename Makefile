@@ -13,6 +13,16 @@ test:
 	@REDISRS_SERVER_TYPE=tcp RUST_TEST_THREADS=1 cargo test --all-features -- --nocapture
 
 	@echo "===================================================================="
+	@echo "Testing Connection Type TCP with all features on tokio"
+	@echo "===================================================================="
+	@REACTOR_TYPE=tokio REDISRS_SERVER_TYPE=tcp RUST_TEST_THREADS=1 cargo test --test test_async --all-features -- --nocapture
+
+	@echo "===================================================================="
+	@echo "Testing Connection Type TCP with all features on async_std"
+	@echo "===================================================================="
+	@REACTOR_TYPE=async_std REDISRS_SERVER_TYPE=tcp RUST_TEST_THREADS=1 cargo test --test test_async --all-features -- --nocapture
+
+	@echo "===================================================================="
 	@echo "Testing Connection Type UNIX"
 	@echo "===================================================================="
 	@REDISRS_SERVER_TYPE=unix cargo test --test parser --test test_basic --test test_types --all-features

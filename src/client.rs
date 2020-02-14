@@ -57,7 +57,7 @@ impl Client {
     pub async fn get_async_connection(&self) -> RedisResult<crate::aio::Connection> {
         #[cfg(all(feature = "tokio-comp", not(feature = "async-std-comp")))]
         {
-            self.get_tokio_connection_tokio().await
+            self.get_tokio_connection().await
         }
 
         #[cfg(all(not(feature = "tokio-comp"), feature = "async-std-comp"))]
@@ -68,7 +68,7 @@ impl Client {
         #[cfg(all(feature = "tokio-comp", feature = "async-std-comp"))]
         {
             if tokio::runtime::Handle::try_current().is_ok() {
-                self.get_tokio_connection_tokio().await
+                self.get_tokio_connection().await
             } else {
                 self.get_async_std_connection().await
             }
@@ -82,7 +82,7 @@ impl Client {
 
     /// Returns an async connection from the client.
     #[cfg(feature = "tokio-comp")]
-    pub async fn get_tokio_connection_tokio(&self) -> RedisResult<crate::aio::Connection> {
+    pub async fn get_tokio_connection(&self) -> RedisResult<crate::aio::Connection> {
         crate::aio::connect_tokio(&self.connection_info).await
     }
 
@@ -122,7 +122,7 @@ impl Client {
         }
     }
 
-    /// Returns an async multiplexed connection from the client.
+    /// Returns an async multiplexed connection from the client. using Tokio
     ///
     /// A multiplexed connection can be cloned, allowing requests to be be sent concurrently
     /// on the same underlying connection (tcp/unix socket).
@@ -139,12 +139,10 @@ impl Client {
         Ok(connection)
     }
 
-    /// Returns an async multiplexed connection from the client.
+    /// Returns an async multiplexed connection from the client using async_std.
     ///
     /// A multiplexed connection can be cloned, allowing requests to be be sent concurrently
     /// on the same underlying connection (tcp/unix socket).
-    ///
-    /// This requires the `tokio-rt-core` feature as it uses the default tokio executor.
     #[cfg(feature = "async-std-comp")]
     pub async fn get_multiplexed_async_std_connection(
         &self,

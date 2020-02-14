@@ -35,7 +35,7 @@ fn test_args() {
     .unwrap();
 }
 
-#[test]
+/*#[test]
 fn dont_panic_on_closed_multiplexed_connection() {
     let ctx = TestContext::new();
     let connect = ctx.multiplexed_async_connection();
@@ -73,6 +73,50 @@ fn dont_panic_on_closed_multiplexed_connection() {
             })
             .await
     });
+}*/
+
+#[test]
+fn dont_panic_on_closed_multiplexed_connection() {
+    block_on_all(async {
+        let ctx = TestContext::new();
+        let con = ctx.multiplexed_async_connection().await?;
+        drop(ctx);
+
+        async {
+
+            let cmd = move || {
+                let mut con = con.clone();
+                async move {
+                    redis::cmd("SET")
+                        .arg("key1")
+                        .arg(b"foo")
+                        .query_async(&mut con)
+                        .await
+                }
+            };
+
+            let result: RedisResult<()> = cmd().await;
+
+            assert_eq!(
+                result.as_ref().unwrap_err().kind(),
+                redis::ErrorKind::IoError,
+                "{}",
+                result.as_ref().unwrap_err()
+            );
+
+            let result = cmd().await;
+
+            assert_eq!(
+                result.as_ref().unwrap_err().kind(),
+                redis::ErrorKind::IoError,
+                "{}",
+                result.as_ref().unwrap_err()
+            );
+
+            Ok(()) as RedisResult<()>
+        }.await
+    })
+    .unwrap()
 }
 
 #[test]
@@ -148,16 +192,17 @@ fn test_error(con: &MultiplexedConnection) -> impl Future<Output = RedisResult<(
 #[test]
 fn test_args_multiplexed_connection() {
     let ctx = TestContext::new();
-    block_on_all(async move {
-        ctx.multiplexed_async_connection()
-            .and_then(|con| {
-                let cmds = (0..100).map(move |i| test_cmd(&con, i));
-                future::try_join_all(cmds).map_ok(|results| {
-                    assert_eq!(results.len(), 100);
-                })
-            })
-            .map_err(|err| panic!("{}", err))
-            .await
+    
+    block_on_all(async {
+        let con = ctx.multiplexed_async_connection().await?;
+
+        let cmds = (0..100).map(move |i| test_cmd(&con, i));
+
+        let results = future::try_join_all(cmds).await?;
+
+        assert_eq!(results.len(), 100);
+
+        Ok(()) as RedisResult<()>
     })
     .unwrap();
 }
@@ -165,25 +210,26 @@ fn test_args_multiplexed_connection() {
 #[test]
 fn test_args_with_errors_multiplexed_connection() {
     let ctx = TestContext::new();
-    block_on_all(async move {
-        ctx.multiplexed_async_connection()
-            .and_then(|con| {
-                let cmds = (0..100).map(move |i| {
-                    let con = con.clone();
-                    async move {
-                        if i % 2 == 0 {
-                            test_cmd(&con, i).await
-                        } else {
-                            test_error(&con).await
-                        }
-                    }
-                });
-                future::try_join_all(cmds).map_ok(|results| {
-                    assert_eq!(results.len(), 100);
-                })
-            })
-            .map_err(|err| panic!("{}", err))
-            .await
+    block_on_all(async {
+        let con = ctx
+            .multiplexed_async_connection()
+            .await?;
+
+        let cmds = (0..100).map(move |i| {
+            let con = con.clone();
+            async move {
+                if i % 2 == 0 {
+                    test_cmd(&con, i).await
+                } else {
+                    test_error(&con).await
+                }
+            }
+        });
+
+        let results = future::try_join_all(cmds).await?;
+        assert_eq!(results.len(), 100);
+
+        Ok(()) as RedisResult<()>
     })
     .unwrap();
 }
@@ -191,42 +237,40 @@ fn test_args_with_errors_multiplexed_connection() {
 #[test]
 fn test_transaction_multiplexed_connection() {
     let ctx = TestContext::new();
-    block_on_all(async move {
-        ctx.multiplexed_async_connection()
-            .and_then(|con| {
-                let cmds = (0..100).map(move |i| {
-                    let mut con = con.clone();
-                    async move {
-                        let foo_val = i;
-                        let bar_val = format!("bar{}", i);
+    block_on_all(async {
+        let con = ctx.multiplexed_async_connection().await?;
 
-                        let mut pipe = redis::pipe();
-                        pipe.atomic()
-                            .cmd("SET")
-                            .arg("key")
-                            .arg(foo_val)
-                            .ignore()
-                            .cmd("SET")
-                            .arg(&["key2", &bar_val[..]])
-                            .ignore()
-                            .cmd("MGET")
-                            .arg(&["key", "key2"]);
+        let cmds = (0..100).map(move |i| {
+            let mut con = con.clone();
+            async move {
+                let foo_val = i;
+                let bar_val = format!("bar{}", i);
 
-                        pipe.query_async(&mut con)
-                            .map(move |result| {
-                                assert_eq!(Ok(((foo_val, bar_val.into_bytes()),)), result);
-                                result
-                            })
-                            .await
-                    }
-                });
-                future::try_join_all(cmds)
-            })
-            .map_ok(|results| {
-                assert_eq!(results.len(), 100);
-            })
-            .map_err(|err| panic!("{}", err))
-            .await
+                let mut pipe = redis::pipe();
+                pipe.atomic()
+                    .cmd("SET")
+                    .arg("key")
+                    .arg(foo_val)
+                    .ignore()
+                    .cmd("SET")
+                    .arg(&["key2", &bar_val[..]])
+                    .ignore()
+                    .cmd("MGET")
+                    .arg(&["key", "key2"]);
+
+                pipe.query_async(&mut con)
+                    .map(move |result| {
+                        assert_eq!(Ok(((foo_val, bar_val.into_bytes()),)), result);
+                        result
+                    })
+                    .await
+            }
+        });
+        let results = future::try_join_all(cmds).await?;
+
+        assert_eq!(results.len(), 100);
+
+        Ok(()) as RedisResult<()>
     })
     .unwrap();
 }
@@ -241,9 +285,9 @@ fn test_script() {
     let script1 = redis::Script::new("return redis.call('SET', KEYS[1], ARGV[1])");
     let script2 = redis::Script::new("return redis.call('GET', KEYS[1])");
 
-    let ctx = TestContext::new();
+    block_on_all(async {
+        let ctx = TestContext::new();
 
-    block_on_all(async move {
         let mut con = ctx.multiplexed_async_connection().await?;
         script1
             .key("key1")

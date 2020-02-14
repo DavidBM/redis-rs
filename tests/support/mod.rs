@@ -28,18 +28,24 @@ pub fn current_thread_runtime() -> tokio::runtime::Runtime {
     builder.basic_scheduler().build().unwrap()
 }
 
-pub fn block_on_all<F>(f: F) -> F::Output
+pub fn block_on_all<F>(_f: F) -> F::Output
 where
     F: Future,
 {
-    current_thread_runtime().block_on(f)
-}
-#[cfg(feature = "async-std-comp")]
-pub fn block_on_all_using_async_std<F>(f: F) -> F::Output
-where
-    F: Future,
-{
-    async_std::task::block_on(f)
+    match env::var("REACTOR_TYPE")
+        .ok()
+        .as_ref()
+        .map(|x| &x[..])
+    {
+        #[cfg(feature = "tokio-comp")]
+        Some("tokio") => current_thread_runtime().block_on(_f),
+        #[cfg(feature = "async-std-comp")]
+        Some("async_std") => async_std::task::block_on(_f),
+        #[cfg(feature = "tokio-comp")]
+        _ => current_thread_runtime().block_on(_f),
+        #[cfg(not(feature = "tokio-comp"))]
+        _ => panic!("tokio-comp or async-std-comp features required for async tests"),
+    }
 }
 
 #[cfg(feature = "cluster")]
@@ -195,12 +201,20 @@ impl TestContext {
 
     #[cfg(feature = "aio")]
     pub async fn async_connection(&self) -> redis::RedisResult<redis::aio::Connection> {
-        self.client.get_async_connection().await
-    }
-
-    #[cfg(feature = "async-std-comp")]
-    pub async fn async_connection_async_std(&self) -> redis::RedisResult<redis::aio::Connection> {
-        self.client.get_async_std_connection().await
+        match env::var("REACTOR_TYPE")
+            .ok()
+            .as_ref()
+            .map(|x| &x[..])
+        {
+            #[cfg(feature = "tokio-comp")]
+            Some("tokio") => self.client.get_tokio_connection().await,
+            #[cfg(feature = "async-std-comp")]
+            Some("async_std") => self.client.get_async_std_connection().await,
+            #[cfg(feature = "tokio-comp")]
+            _ => self.client.get_tokio_connection().await,
+            #[cfg(all(feature = "aio", not(feature = "tokio-comp"), not(feature = "async-std-comp")))]
+            _ => compile_error!("tokio-comp or async-std-comp features required for async tests"),
+        }
     }
 
     pub fn stop_server(&mut self) {
@@ -208,25 +222,39 @@ impl TestContext {
     }
 
     #[cfg(feature = "tokio-rt-core")]
-    pub fn multiplexed_async_connection(
+    pub async fn multiplexed_async_connection(
         &self,
-    ) -> impl Future<Output = redis::RedisResult<redis::aio::MultiplexedConnection>> {
-        self.multiplexed_async_connection_tokio()
+    ) -> redis::RedisResult<redis::aio::MultiplexedConnection> {
+        match env::var("REACTOR_TYPE")
+            .ok()
+            .as_ref()
+            .map(|x| &x[..])
+        {
+            #[cfg(feature = "tokio-comp")]
+            Some("tokio") => self.multiplexed_async_connection_tokio().await,
+            #[cfg(feature = "async-std-comp")]
+            Some("async_std") => self.multiplexed_async_connection_async_std().await,
+            #[cfg(feature = "tokio-comp")]
+            _ => self.multiplexed_async_connection_tokio().await,
+            #[cfg(all(feature = "aio", not(feature = "tokio-comp"), not(feature = "async-std-comp")))]
+            _ => compile_error!("tokio-comp or async-std-comp features required for async tests"),
+        }
     }
 
     #[cfg(feature = "tokio-rt-core")]
-    pub fn multiplexed_async_connection_tokio(
+    #[cfg(feature = "tokio-comp")]
+    pub async fn multiplexed_async_connection_tokio(
         &self,
-    ) -> impl Future<Output = redis::RedisResult<redis::aio::MultiplexedConnection>> {
+    ) -> redis::RedisResult<redis::aio::MultiplexedConnection> {
         let client = self.client.clone();
-        async move { client.get_multiplexed_tokio_connection().await }
+        client.get_multiplexed_tokio_connection().await
     }
     #[cfg(feature = "async-std-comp")]
-    pub fn multiplexed_async_connection_async_std(
+    pub async fn multiplexed_async_connection_async_std(
         &self,
-    ) -> impl Future<Output = redis::RedisResult<redis::aio::MultiplexedConnection>> {
+    ) -> redis::RedisResult<redis::aio::MultiplexedConnection> {
         let client = self.client.clone();
-        async move { client.get_multiplexed_async_std_connection().await }
+        client.get_multiplexed_async_std_connection().await
     }
 }
 
